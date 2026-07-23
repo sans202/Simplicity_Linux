@@ -135,8 +135,34 @@ async function resolvePythonURL() {
 const tarBin = () => (isWin ? 'tar' : '/usr/bin/tar');
 
 function extract(tgz, into) {
+  /* A previous failed attempt leaves a partial tree behind — start clean so
+     a relaunch actually recovers. */
+  fs.rmSync(into, { recursive: true, force: true });
   fs.mkdirSync(into, { recursive: true });
-  execFileSync(tarBin(), ['xzf', tgz, '-C', into, '--strip-components=1']);
+  /* The excludes matter on Windows: the SearXNG repo's deployment scripting
+     (utils/, container/) contains symlink entries, and Windows tar.exe can't
+     create symlinks without admin rights — the whole extraction dies on the
+     first one ("Can't create ...: Invalid argument"). None of those paths are
+     needed to RUN SearXNG, so skip them everywhere. */
+  execFileSync(tarBin(), [
+    'xzf',
+    tgz,
+    '-C',
+    into,
+    '--strip-components=1',
+    '--exclude',
+    '*/utils',
+    '--exclude',
+    '*/utils/*',
+    '--exclude',
+    '*/container',
+    '--exclude',
+    '*/container/*',
+    '--exclude',
+    '*/.github',
+    '--exclude',
+    '*/.github/*',
+  ]);
   fs.rmSync(tgz, { force: true });
 }
 
