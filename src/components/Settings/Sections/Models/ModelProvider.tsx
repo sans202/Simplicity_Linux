@@ -28,9 +28,13 @@ const ModelProvider = ({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    /* Auto-registered providers (transformers, a connected Claude account)
+       can arrive with no stored config at all — a fresh install renders this
+       card before anything was ever saved. */
+    const stored = modelProvider.config ?? {};
     const initial: Record<string, any> = {};
     fields.forEach((field) => {
-      initial[field.key] = modelProvider.config[field.key] ?? field.default ?? '';
+      initial[field.key] = stored[field.key] ?? field.default ?? '';
     });
     setConfig(initial);
   }, [fields, modelProvider.config]);

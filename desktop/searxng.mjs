@@ -134,37 +134,40 @@ async function resolvePythonURL() {
    minimal PATH; Windows 10+ ships bsdtar as tar.exe. */
 const tarBin = () => (isWin ? 'tar' : '/usr/bin/tar');
 
-function extract(tgz, into) {
+function extract(tgz, into, excludes = []) {
   /* A previous failed attempt leaves a partial tree behind — start clean so
      a relaunch actually recovers. */
   fs.rmSync(into, { recursive: true, force: true });
   fs.mkdirSync(into, { recursive: true });
-  /* The excludes matter on Windows: the SearXNG repo's deployment scripting
-     (utils/, container/) contains symlink entries, and Windows tar.exe can't
-     create symlinks without admin rights — the whole extraction dies on the
-     first one ("Can't create ...: Invalid argument"). None of those paths are
-     needed to RUN SearXNG, so skip them everywhere. */
   execFileSync(tarBin(), [
     'xzf',
     tgz,
     '-C',
     into,
     '--strip-components=1',
-    '--exclude',
-    '*/utils',
-    '--exclude',
-    '*/utils/*',
-    '--exclude',
-    '*/container',
-    '--exclude',
-    '*/container/*',
-    '--exclude',
-    '*/.github',
-    '--exclude',
-    '*/.github/*',
+    ...excludes.flatMap((pattern) => ['--exclude', pattern]),
   ]);
   fs.rmSync(tgz, { force: true });
 }
+
+/* Skipped when unpacking the SearXNG repo — and ONLY the SearXNG repo. Its
+   deployment scripting (utils/, container/) contains a symlink, and Windows
+   tar.exe can't create symlinks without admin rights, which kills the whole
+   extraction. None of these paths are needed to RUN SearXNG.
+
+   The patterns are anchored to the tarball's root directory on purpose:
+   bsdtar's `*` matches across `/`, so a bare pattern like '*\/utils' also
+   deletes every directory named utils at ANY depth — applied to the Python
+   runtime tarball it strips pip's _internal/utils and breaks pip entirely
+   (observed: fresh installs dying at "pip install --upgrade"). */
+const SEARXNG_EXCLUDES = [
+  'searxng-*/utils',
+  'searxng-*/utils/*',
+  'searxng-*/container',
+  'searxng-*/container/*',
+  'searxng-*/.github',
+  'searxng-*/.github/*',
+];
 
 /* SearXNG's settings. `formats: [json]` is the load-bearing line — without it
    the JSON API that src/lib/searxng.ts calls returns 403. Mirrors upstream's
@@ -224,6 +227,16 @@ export async function provision(dataDir, onLog) {
   const p = paths(dataDir);
   if (isProvisioned(dataDir)) return p;
 
+  /* The marker is only written on full success, so reaching this point with
+     an existing tree means a PREVIOUS provisioning died partway. Its remains
+     are poison — the existsSync fast-paths below would happily reuse a
+     half-extracted Python — so start over from nothing. The re-download is
+     the price of a launch that actually recovers. */
+  if (fs.existsSync(p.root)) {
+    onLog?.('Previous search setup was incomplete — starting it over.');
+    fs.rmSync(p.root, { recursive: true, force: true });
+  }
+
   fs.mkdirSync(p.root, { recursive: true });
   onLog?.('Setting up local search — this is a one-time download of about 150 MB.');
 
@@ -238,7 +251,7 @@ export async function provision(dataDir, onLog) {
     const tgz = path.join(p.root, 'searxng.tar.gz');
     await download(SEARXNG_TARBALL, tgz, onLog, 'the SearXNG search engine');
     onLog?.('Unpacking SearXNG…');
-    extract(tgz, p.src);
+    extract(tgz, p.src, SEARXNG_EXCLUDES);
   }
 
   const py = pythonBin(p);

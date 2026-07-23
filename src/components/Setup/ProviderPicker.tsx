@@ -406,6 +406,24 @@ const ApiKeyExplainer = () => {
         on your computer) and Claude through your existing subscription both
         work with no key at all.
       </p>
+      <p className="text-[11px] sm:text-xs leading-relaxed text-black/60 dark:text-white/60">
+        <span className="font-medium text-black/80 dark:text-white/80">
+          One key unlocks every model that provider offers
+        </span>{' '}
+        — add an OpenAI key and GPT-5.1 and GPT-5 mini both appear in the
+        chat&apos;s model dropdown; an xAI key adds Grok; and so on. Nothing is
+        locked behind a plan.
+      </p>
+      <p className="text-[11px] sm:text-xs leading-relaxed text-black/60 dark:text-white/60">
+        <span className="font-medium text-black/80 dark:text-white/80">
+          Getting a key takes ~2 minutes:
+        </span>{' '}
+        use the &quot;Get a key&quot; link on a provider below → sign in (or
+        create a free developer account) → add a small credit balance if the
+        platform asks (usually $5 minimum; each answer costs fractions of a
+        cent and Simplicity shows the exact price under every answer) → click
+        &quot;Create key&quot; → copy it → paste it here.
+      </p>
     </div>
   );
 };
@@ -434,7 +452,12 @@ const ProviderPicker = ({
        account" half of the Anthropic row, so it would be a confusing duplicate
        of a provider they've already seen. */
   const offered = modelProviders.filter(
-    (p) => p.key !== 'transformers' && p.key !== 'claudecode',
+    (p) =>
+      p.key !== 'transformers' &&
+      p.key !== 'claudecode' &&
+      /* Niche self-hosted server with no model catalog entries — a dead-end
+         row for the audience this screen is written for. */
+      p.key !== 'lemonade',
   );
 
   /* Anthropic counts as connected whichever way in they used. */
