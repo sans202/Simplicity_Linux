@@ -98,7 +98,18 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
         this.config.options?.frequencyPenalty,
       presence_penalty:
         input.options?.presencePenalty ?? this.config.options?.presencePenalty,
+      ...(input.options?.reasoningEffort
+        ? { reasoning_effort: input.options.reasoningEffort }
+        : {}),
     });
+
+    if (response.usage) {
+      this.recordUsage({
+        inputTokens: response.usage.prompt_tokens ?? 0,
+        outputTokens: response.usage.completion_tokens ?? 0,
+        cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+      });
+    }
 
     if (response.choices && response.choices.length > 0) {
       return {
@@ -155,7 +166,13 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
         this.config.options?.frequencyPenalty,
       presence_penalty:
         input.options?.presencePenalty ?? this.config.options?.presencePenalty,
+      ...(input.options?.reasoningEffort
+        ? { reasoning_effort: input.options.reasoningEffort }
+        : {}),
       stream: true,
+      /* Without this the final SSE chunk carries no usage at all and the
+         writer's cost silently reports as zero. */
+      stream_options: { include_usage: true },
     });
 
     let recievedToolCalls: { name: string; id: string; arguments: string }[] =
@@ -191,6 +208,18 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
           },
         };
       }
+
+      /* The usage chunk is a separate, final chunk whose `choices` array is
+         empty — it yields no content of its own, so this is a sibling branch
+         rather than an `else`, not a replacement for the one above. */
+      if (chunk.usage) {
+        this.recordUsage({
+          inputTokens: chunk.usage.prompt_tokens ?? 0,
+          outputTokens: chunk.usage.completion_tokens ?? 0,
+          cachedInputTokens:
+            chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
+        });
+      }
     }
   }
 
@@ -212,6 +241,14 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
       response_format: zodResponseFormat(input.schema, 'object'),
     });
 
+    if (response.usage) {
+      this.recordUsage({
+        inputTokens: response.usage.prompt_tokens ?? 0,
+        outputTokens: response.usage.completion_tokens ?? 0,
+        cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+      });
+    }
+
     if (response.choices && response.choices.length > 0) {
       try {
         return input.schema.parse(
@@ -229,6 +266,12 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
     throw new Error('No response from OpenAI');
   }
 
+  /* TODO: usage isn't recorded here. streamObject backs the Responses API
+     path (suggestion/media flows), not any call in the priced turn
+     (classifier/query-planner/writer all use generateObject/streamText
+     above), so it's left unwired for v1 — see SPEC 1 §3.2. If it's ever
+     used for a priced call, read `response.usage.input_tokens` /
+     `output_tokens` off the `response.completed` chunk. */
   async *streamObject<T>(input: GenerateObjectInput): AsyncGenerator<T> {
     let recievedObj: string = '';
 

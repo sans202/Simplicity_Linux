@@ -61,6 +61,10 @@ class ModelRegistry {
 
         providers.push({
           id: p.id,
+          /* The client needs the type to match providers against the curated
+             model catalog — ids are per-connection and names are editable, so
+             neither identifies what a provider actually is. */
+          type: p.type,
           name: p.name,
           chatModels: m.chat,
           embeddingModels: m.embedding,

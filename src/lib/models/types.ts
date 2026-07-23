@@ -18,6 +18,9 @@ type ProviderMetadata = {
 
 type MinimalProvider = {
   id: string;
+  /* Provider kind ('openai', 'ollama', 'claudecode', …) — distinct from `id`,
+     which is per-connection, and `name`, which the user can rename. */
+  type: string;
   name: string;
   chatModels: Model[];
   embeddingModels: Model[];
@@ -35,6 +38,9 @@ type GenerateOptions = {
   stopSequences?: string[];
   frequencyPenalty?: number;
   presencePenalty?: number;
+  /* Only sent for models the catalog marks reasoning-capable — most models
+     reject the parameter outright. */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 };
 
 type Tool = {

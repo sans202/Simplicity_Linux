@@ -7,7 +7,8 @@ import TransformersProvider from './transformers';
 import GroqProvider from './groq';
 import LemonadeProvider from './lemonade';
 import AnthropicProvider from './anthropic';
-import LMStudioProvider from './lmstudio';
+import ClaudeCodeProvider from './claudecode';
+import XAIProvider from './xai';
 
 export const providers: Record<string, ProviderConstructor<any>> = {
   openai: OpenAIProvider,
@@ -17,7 +18,8 @@ export const providers: Record<string, ProviderConstructor<any>> = {
   groq: GroqProvider,
   lemonade: LemonadeProvider,
   anthropic: AnthropicProvider,
-  lmstudio: LMStudioProvider,
+  claudecode: ClaudeCodeProvider,
+  xai: XAIProvider,
 };
 
 export const getModelProvidersUIConfigSection =

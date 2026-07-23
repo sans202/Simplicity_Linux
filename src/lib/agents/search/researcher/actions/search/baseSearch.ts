@@ -40,10 +40,19 @@ export const executeSearch = async (input: {
 
     const results: Chunk[] = [];
 
+    /* Each query is isolated: a SearxNG timeout or engine error on one query
+       must not reject the whole batch and zero out the round. */
     const search = async (q: string) => {
-      const res = await searchSearxng(q, {
-        ...(input.searchConfig ? input.searchConfig : {}),
-      });
+      let res: Awaited<ReturnType<typeof searchSearxng>>;
+
+      try {
+        res = await searchSearxng(q, {
+          ...(input.searchConfig ? input.searchConfig : {}),
+        });
+      } catch (err) {
+        console.error(`SearxNG query failed: "${q}"`, err);
+        return;
+      }
 
       let resultChunks: Chunk[] = [];
 
@@ -176,9 +185,16 @@ export const executeSearch = async (input: {
     const searchResults: Chunk[] = [];
 
     const search = async (q: string) => {
-      const res = await searchSearxng(q, {
-        ...(input.searchConfig ? input.searchConfig : {}),
-      });
+      let res: Awaited<ReturnType<typeof searchSearxng>>;
+
+      try {
+        res = await searchSearxng(q, {
+          ...(input.searchConfig ? input.searchConfig : {}),
+        });
+      } catch (err) {
+        console.error(`SearxNG query failed: "${q}"`, err);
+        return;
+      }
 
       let resultChunks: Chunk[] = [];
 
@@ -269,21 +285,31 @@ export const executeSearch = async (input: {
         ),
     });
 
-    const pickerResponse = await input.llm.generateObject<typeof pickerSchema>({
-      schema: pickerSchema,
-      messages: [
-        {
-          role: 'system',
-          content: pickerPrompt,
-        },
-        {
-          role: 'user',
-          content: `<queries>${input.queries.join(', ')}</queries>\n<search_results>${searchResults.map((result, index) => `<result indice=${index}>${JSON.stringify(result)}</result>`).join('\n')}</search_results>`,
-        },
-      ],
-    });
+    let pickedIndices: number[];
 
-    const pickedIndices = pickerResponse.picked_indices.slice(0, 3);
+    try {
+      const pickerResponse = await input.llm.generateObject<
+        typeof pickerSchema
+      >({
+        schema: pickerSchema,
+        messages: [
+          {
+            role: 'system',
+            content: pickerPrompt,
+          },
+          {
+            role: 'user',
+            content: `<queries>${input.queries.join(', ')}</queries>\n<search_results>${searchResults.map((result, index) => `<result indice=${index}>${JSON.stringify(result)}</result>`).join('\n')}</search_results>`,
+          },
+        ],
+      });
+
+      pickedIndices = pickerResponse.picked_indices.slice(0, 3);
+    } catch (err) {
+      /* Picker down ≠ round down: fall back to the first results in order. */
+      console.error('Result picker failed, falling back to top results:', err);
+      pickedIndices = searchResults.slice(0, 3).map((_, i) => i);
+    }
     const pickedResults = pickedIndices
       .map((i) => searchResults[i])
       .filter((r) => r !== undefined);

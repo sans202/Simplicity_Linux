@@ -6,6 +6,7 @@ import {
   Switch,
 } from '@headlessui/react';
 import {
+  CaretDownIcon,
   GlobeIcon,
   GraduationCapIcon,
   NetworkIcon,
@@ -37,8 +38,22 @@ const Sources = () => {
     <Popover className="relative">
       {({ open }) => (
         <>
-          <PopoverButton className="flex items-center justify-center active:border-none hover:bg-light-200 hover:dark:bg-dark-200 p-2 rounded-lg focus:outline-none text-black/50 dark:text-white/50 active:scale-95 transition duration-200 hover:text-black dark:hover:text-white">
-            <GlobeIcon className="h-[18px] w-auto" />
+          {/* Labelled for the same reason as the model button — and the label
+              doubles as the current state, so which sources are in play is
+              visible without opening anything. */}
+          <PopoverButton className="flex flex-row items-center gap-1.5 active:border-none hover:bg-light-200 hover:dark:bg-dark-200 px-2 py-1.5 rounded-lg focus:outline-none text-black/50 dark:text-white/50 active:scale-95 transition duration-200 hover:text-black dark:hover:text-white">
+            <GlobeIcon className="h-[16px] w-auto shrink-0" />
+            <span className="text-xs font-medium max-w-[110px] truncate">
+              {sources.length === 0
+                ? 'Sources'
+                : sources.length === sourcesList.length
+                  ? 'All sources'
+                  : sourcesList
+                      .filter((s) => sources.includes(s.key))
+                      .map((s) => s.name)
+                      .join(', ')}
+            </span>
+            <CaretDownIcon className="h-[12px] w-auto shrink-0 opacity-60" />
           </PopoverButton>
           <AnimatePresence>
             {open && (

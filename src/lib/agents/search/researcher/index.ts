@@ -1,38 +1,58 @@
-import { ActionOutput, ResearcherInput, ResearcherOutput } from '../types';
-import { ActionRegistry } from './actions';
-import { getResearcherPrompt } from '@/lib/prompts/search/researcher';
+import {
+  ActionOutput,
+  ResearcherInput,
+  ResearcherOutput,
+  SearchAgentConfig,
+} from '../types';
+import { executeSearch } from './actions/search/baseSearch';
+import uploadsSearchAction from './actions/uploadsSearch';
+import { planQueries, refineQueries } from './queryPlanner';
 import SessionManager from '@/lib/session';
-import { Message, ReasoningResearchBlock } from '@/lib/types';
-import formatChatHistoryAsString from '@/lib/utils/formatHistory';
-import { ToolCall } from '@/lib/models/types';
+import { Chunk, ResearchBlock } from '@/lib/types';
+import { SearxngSearchOptions } from '@/lib/searxng';
+
+/* Deterministic, code-driven research.
+ *
+ * Search used to run inside a model tool-call loop whose only exit signal was
+ * "the model made no tool calls" — which is also what a provider that cannot
+ * emit tool calls (the Claude Code CLI, any text-only model) produces on every
+ * turn. Those providers silently returned zero sources. Retrieval is a code
+ * path now: the model plans queries (with a hard fallback to the raw
+ * question), code runs the searches, and a model is consulted between rounds
+ * only to decide whether MORE searching would help — never whether searching
+ * happens at all. */
+
+type Vertical = {
+  name: string;
+  searchConfig?: SearxngSearchOptions;
+};
+
+const ROUNDS: Record<'speed' | 'balanced' | 'quality', number> = {
+  speed: 1,
+  balanced: 2,
+  quality: 3,
+};
+
+/* Deep Research hard caps. All of them are enforced in code — never by
+   asking a model nicely — because the deterministic guarantee (retrieval
+   always happens, and always stops) has to hold even when refinement always
+   claims more rounds would help. */
+const DEEP_RESEARCH_MAX_ROUNDS = 6;
+const DEEP_RESEARCH_MAX_QUERIES_PER_ROUND = 3;
+const DEEP_RESEARCH_MAX_SEARXNG_QUERIES = 20;
+const DEEP_RESEARCH_MAX_WALL_CLOCK_MS = 240_000;
+const DEEP_RESEARCH_MAX_RAW_CHUNKS = 60;
 
 class Researcher {
   async research(
     session: SessionManager,
     input: ResearcherInput,
   ): Promise<ResearcherOutput> {
-    let actionOutput: ActionOutput[] = [];
-    let maxIteration =
-      input.config.mode === 'speed'
-        ? 2
-        : input.config.mode === 'balanced'
-          ? 6
-          : 25;
-
-    const availableTools = ActionRegistry.getAvailableActionTools({
-      classification: input.classification,
-      fileIds: input.config.fileIds,
-      mode: input.config.mode,
-      sources: input.config.sources,
-    });
-
-    const availableActionsDescription =
-      ActionRegistry.getAvailableActionsDescriptions({
-        classification: input.classification,
-        fileIds: input.config.fileIds,
-        mode: input.config.mode,
-        sources: input.config.sources,
-      });
+    const actionOutput: ActionOutput[] = [];
+    const mode = input.config.mode;
+    const utilityLLM = input.config.utilityLLM ?? input.config.llm;
+    const standaloneQuery =
+      input.classification.standaloneFollowUp || input.followUp;
 
     const researchBlockId = crypto.randomUUID();
 
@@ -44,142 +64,280 @@ class Researcher {
       },
     });
 
-    const agentMessageHistory: Message[] = [
-      {
-        role: 'user',
-        content: `
-          <conversation>
-          ${formatChatHistoryAsString(input.chatHistory.slice(-10))}
-           User: ${input.followUp} (Standalone question: ${input.classification.standaloneFollowUp})
-           </conversation>
-        `,
-      },
-    ];
+    const block = session.getBlock(researchBlockId) as ResearchBlock;
 
-    for (let i = 0; i < maxIteration; i++) {
-      const researcherPrompt = getResearcherPrompt(
-        availableActionsDescription,
-        input.config.mode,
-        i,
-        maxIteration,
-        input.config.fileIds,
+    const emitReasoning = (text: string) => {
+      if (!block) return;
+      block.data.subSteps.push({
+        id: crypto.randomUUID(),
+        type: 'reasoning',
+        reasoning: text,
+      });
+      session.updateBlock(researchBlockId, [
+        { op: 'replace', path: '/data/subSteps', value: block.data.subSteps },
+      ]);
+    };
+
+    /* Which verticals to fan out to. Web runs whenever it is enabled; the
+       classifier can only ADD verticals (academic, discussions), never remove
+       web retrieval. */
+    const verticals: Vertical[] = [];
+    if (input.config.sources.includes('web')) {
+      verticals.push({ name: 'web' });
+    }
+    if (
+      input.config.sources.includes('academic') &&
+      input.classification.classification.academicSearch
+    ) {
+      verticals.push({
+        name: 'academic',
+        searchConfig: { engines: ['arxiv', 'google scholar', 'pubmed'] },
+      });
+    }
+    if (
+      input.config.sources.includes('discussions') &&
+      input.classification.classification.discussionSearch
+    ) {
+      verticals.push({
+        name: 'discussions',
+        searchConfig: { engines: ['reddit'] },
+      });
+    }
+    if (verticals.length === 0) {
+      verticals.push({ name: 'web' });
+    }
+
+    const runVerticals = async (
+      queries: string[],
+      overrideMode?: SearchAgentConfig['mode'],
+    ) => {
+      const results = await Promise.all(
+        verticals.map(async (vertical) => {
+          try {
+            return await executeSearch({
+              llm: utilityLLM,
+              embedding: input.config.embedding,
+              mode: overrideMode ?? mode,
+              queries,
+              researchBlock: block,
+              session,
+              searchConfig: vertical.searchConfig,
+            });
+          } catch (err) {
+            console.error(`Search vertical '${vertical.name}' failed:`, err);
+            return [] as Chunk[];
+          }
+        }),
       );
 
-      const actionStream = input.config.llm.streamText({
-        messages: [
-          {
-            role: 'system',
-            content: researcherPrompt,
-          },
-          ...agentMessageHistory,
-        ],
-        tools: availableTools,
-      });
+      return results.flat();
+    };
 
-      const block = session.getBlock(researchBlockId);
+    const seenQueries = new Set<string>();
+    const allTitles: string[] = [];
+    let plan = await planQueries({
+      llm: utilityLLM,
+      standaloneQuery,
+      chatHistory: input.chatHistory,
+      mode,
+    });
 
-      let reasoningEmitted = false;
-      let reasoningId = crypto.randomUUID();
+    const isDeepResearch = input.config.searchMode === 'deepResearch';
 
-      let finalToolCalls: ToolCall[] = [];
+    /* Tracked across the whole turn (not just the deep-research loop) so the
+       zero-result backstop below can also respect the query cap. */
+    let deepResearchSearxngQueries = 0;
 
-      for await (const partialRes of actionStream) {
-        if (partialRes.toolCallChunk.length > 0) {
-          partialRes.toolCallChunk.forEach((tc) => {
-            if (
-              tc.name === '__reasoning_preamble' &&
-              tc.arguments['plan'] &&
-              !reasoningEmitted &&
-              block &&
-              block.type === 'research'
-            ) {
-              reasoningEmitted = true;
+    if (isDeepResearch) {
+      const startedAt = Date.now();
+      let rawChunks = 0;
+      /* Every vertical gets fanned the same query list, so one "query" costs
+         `verticals.length` real SearxNG calls — the budget below accounts
+         for that instead of just counting query strings. */
+      const verticalCount = Math.max(verticals.length, 1);
 
-              block.data.subSteps.push({
-                id: reasoningId,
-                type: 'reasoning',
-                reasoning: tc.arguments['plan'],
-              });
+      for (
+        let round = 0;
+        round < DEEP_RESEARCH_MAX_ROUNDS;
+        round++
+      ) {
+        if (input.config.signal?.aborted) break;
+        if (Date.now() - startedAt > DEEP_RESEARCH_MAX_WALL_CLOCK_MS) break;
+        if (deepResearchSearxngQueries >= DEEP_RESEARCH_MAX_SEARXNG_QUERIES)
+          break;
+        if (rawChunks >= DEEP_RESEARCH_MAX_RAW_CHUNKS) break;
 
-              session.updateBlock(researchBlockId, [
-                {
-                  op: 'replace',
-                  path: '/data/subSteps',
-                  value: block.data.subSteps,
-                },
-              ]);
-            } else if (
-              tc.name === '__reasoning_preamble' &&
-              tc.arguments['plan'] &&
-              reasoningEmitted &&
-              block &&
-              block.type === 'research'
-            ) {
-              const subStepIndex = block.data.subSteps.findIndex(
-                (step: any) => step.id === reasoningId,
-              );
+        const remainingQueryBudget = Math.floor(
+          (DEEP_RESEARCH_MAX_SEARXNG_QUERIES - deepResearchSearxngQueries) /
+            verticalCount,
+        );
+        if (remainingQueryBudget <= 0) break;
 
-              if (subStepIndex !== -1) {
-                const subStep = block.data.subSteps[
-                  subStepIndex
-                ] as ReasoningResearchBlock;
-                subStep.reasoning = tc.arguments['plan'];
-                session.updateBlock(researchBlockId, [
-                  {
-                    op: 'replace',
-                    path: '/data/subSteps',
-                    value: block.data.subSteps,
-                  },
-                ]);
-              }
-            }
+        const queries = plan.queries
+          .filter((q) => !seenQueries.has(q.toLowerCase().trim()))
+          .slice(
+            0,
+            Math.min(DEEP_RESEARCH_MAX_QUERIES_PER_ROUND, remainingQueryBudget),
+          );
 
-            const existingIndex = finalToolCalls.findIndex(
-              (ftc) => ftc.id === tc.id,
-            );
+        if (queries.length === 0) break;
 
-            if (existingIndex !== -1) {
-              finalToolCalls[existingIndex].arguments = tc.arguments;
-            } else {
-              finalToolCalls.push(tc);
-            }
+        queries.forEach((q) => seenQueries.add(q.toLowerCase().trim()));
+        emitReasoning(plan.plan);
+
+        /* Breadth pass: same shape as the normal loop, always 'balanced'
+           regardless of the user's speed/balanced/quality tier. */
+        deepResearchSearxngQueries += queries.length * verticalCount;
+        const breadthResults = await runVerticals(queries, 'balanced');
+
+        if (breadthResults.length > 0) {
+          actionOutput.push({ type: 'search_results', results: breadthResults });
+          rawChunks += breadthResults.length;
+          breadthResults.forEach((r) => {
+            if (r.metadata.title) allTitles.push(r.metadata.title);
           });
         }
-      }
 
-      if (finalToolCalls.length === 0) {
-        break;
-      }
+        /* Every second round, additionally scrape+extract the single best
+           refined query so the report gets full-page depth, not just search
+           snippets — 'quality' mode already does picker -> scrape -> extract
+           via the utility LLM. */
+        const isQualityRound = (round + 1) % 2 === 0;
+        if (
+          isQualityRound &&
+          !input.config.signal?.aborted &&
+          deepResearchSearxngQueries + verticalCount <=
+            DEEP_RESEARCH_MAX_SEARXNG_QUERIES &&
+          rawChunks < DEEP_RESEARCH_MAX_RAW_CHUNKS
+        ) {
+          deepResearchSearxngQueries += verticalCount;
+          const bestQuery = queries[0];
+          const qualityResults = await runVerticals([bestQuery], 'quality');
 
-      if (finalToolCalls[finalToolCalls.length - 1].name === 'done') {
-        break;
-      }
+          if (qualityResults.length > 0) {
+            actionOutput.push({
+              type: 'search_results',
+              results: qualityResults,
+            });
+            rawChunks += qualityResults.length;
+            qualityResults.forEach((r) => {
+              if (r.metadata.title) allTitles.push(r.metadata.title);
+            });
+          }
+        }
 
-      agentMessageHistory.push({
-        role: 'assistant',
-        content: '',
-        tool_calls: finalToolCalls,
-      });
+        const lastRound = round === DEEP_RESEARCH_MAX_ROUNDS - 1;
+        if (
+          lastRound ||
+          input.config.signal?.aborted ||
+          Date.now() - startedAt > DEEP_RESEARCH_MAX_WALL_CLOCK_MS ||
+          deepResearchSearxngQueries >= DEEP_RESEARCH_MAX_SEARXNG_QUERIES ||
+          rawChunks >= DEEP_RESEARCH_MAX_RAW_CHUNKS
+        ) {
+          break;
+        }
 
-      const actionResults = await ActionRegistry.executeAll(finalToolCalls, {
-        llm: input.config.llm,
-        embedding: input.config.embedding,
-        session: session,
-        researchBlockId: researchBlockId,
-        fileIds: input.config.fileIds,
-        mode: input.config.mode,
-      });
-
-      actionOutput.push(...actionResults);
-
-      actionResults.forEach((action, i) => {
-        agentMessageHistory.push({
-          role: 'tool',
-          id: finalToolCalls[i].id,
-          name: finalToolCalls[i].name,
-          content: JSON.stringify(action),
+        /* Always attempt refinement between rounds — the only way this loop
+           ends before the hard caps is refinement saying "sufficient". */
+        const refinement = await refineQueries({
+          llm: utilityLLM,
+          standaloneQuery,
+          previousQueries: Array.from(seenQueries),
+          resultTitles: allTitles,
         });
-      });
+
+        if (!refinement) break;
+        plan = refinement;
+      }
+    } else {
+      const rounds = ROUNDS[mode] ?? 1;
+
+      for (let round = 0; round < rounds; round++) {
+        if (input.config.signal?.aborted) break;
+
+        const queries = plan.queries
+          .filter((q) => !seenQueries.has(q.toLowerCase().trim()))
+          .slice(0, 3);
+
+        if (queries.length === 0) break;
+
+        queries.forEach((q) => seenQueries.add(q.toLowerCase().trim()));
+        emitReasoning(plan.plan);
+
+        const roundResults = await runVerticals(queries);
+
+        if (roundResults.length > 0) {
+          actionOutput.push({ type: 'search_results', results: roundResults });
+          roundResults.forEach((r) => {
+            if (r.metadata.title) allTitles.push(r.metadata.title);
+          });
+        }
+
+        const lastRound = round === rounds - 1;
+        if (lastRound || input.config.signal?.aborted) break;
+
+        const refinement = await refineQueries({
+          llm: utilityLLM,
+          standaloneQuery,
+          previousQueries: Array.from(seenQueries),
+          resultTitles: allTitles,
+        });
+
+        if (!refinement) break;
+        plan = refinement;
+      }
+    }
+
+    /* Files attached to the chat are always searched — no model gate here
+       either. */
+    if (input.config.fileIds.length > 0 && !input.config.signal?.aborted) {
+      try {
+        const uploadResults = await uploadsSearchAction.execute(
+          { queries: [standaloneQuery, ...Array.from(seenQueries)].slice(0, 3) },
+          {
+            llm: input.config.llm,
+            embedding: input.config.embedding,
+            session,
+            researchBlockId,
+            fileIds: input.config.fileIds,
+            mode,
+          },
+        );
+        actionOutput.push(uploadResults);
+      } catch (err) {
+        console.error('Uploads search failed:', err);
+      }
+    }
+
+    /* Backstop: searching was intended, so an empty result set means the
+       queries failed us, not that no search was wanted. One plain retry with
+       the question verbatim before giving up. */
+    const foundAnything = actionOutput.some(
+      (a) => a.type === 'search_results' && a.results.length > 0,
+    );
+
+    if (
+      !foundAnything &&
+      !seenQueries.has(standaloneQuery.toLowerCase().trim()) &&
+      !input.config.signal?.aborted &&
+      (!isDeepResearch ||
+        deepResearchSearxngQueries < DEEP_RESEARCH_MAX_SEARXNG_QUERIES)
+    ) {
+      try {
+        const backstopResults = await executeSearch({
+          llm: utilityLLM,
+          embedding: input.config.embedding,
+          mode: mode === 'quality' ? 'balanced' : mode,
+          queries: [standaloneQuery],
+          researchBlock: block,
+          session,
+        });
+        if (backstopResults.length > 0) {
+          actionOutput.push({ type: 'search_results', results: backstopResults });
+        }
+      } catch (err) {
+        console.error('Backstop search failed:', err);
+      }
     }
 
     const searchResults = actionOutput

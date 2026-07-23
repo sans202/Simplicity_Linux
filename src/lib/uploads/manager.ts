@@ -31,7 +31,13 @@ type FileRes = {
 
 class UploadManager {
     private embeddingModel: BaseEmbedding<any>;
-    static uploadsDir = path.join(process.cwd(), 'data', 'uploads');
+    /* DATA_DIR, not cwd: in the packaged app cwd is inside the read-only
+       .app bundle — writing there fails and uploads break. */
+    static uploadsDir = path.join(
+        process.env.DATA_DIR || process.cwd(),
+        'data',
+        'uploads',
+    );
     static uploadedFilesRecordPath = path.join(this.uploadsDir, 'uploaded_files.json');
 
     constructor(private params: UploadManagerParams) {

@@ -39,3 +39,7 @@ db.sqlite
 /searxng
 
 certificates
+
+# Desktop build output
+release/
+tsconfig.tsbuildinfo

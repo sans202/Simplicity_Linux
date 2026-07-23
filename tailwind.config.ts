@@ -24,6 +24,9 @@ const config: Config = {
   darkMode: 'class',
   theme: {
     extend: {
+      fontFamily: {
+        serif: ['var(--font-instrument-serif)', 'Georgia', 'serif'],
+      },
       borderColor: ({ colors }) => {
         return {
           light: themeLight(colors),

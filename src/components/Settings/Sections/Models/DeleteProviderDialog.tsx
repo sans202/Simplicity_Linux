@@ -51,7 +51,7 @@ const DeleteProvider = ({
           setOpen(true);
         }}
         className="group p-1.5 rounded-md hover:bg-light-200 hover:dark:bg-dark-200 transition-colors group"
-        title="Delete connection"
+        title="Remove connection"
       >
         <Trash2
           size={14}
@@ -76,15 +76,14 @@ const DeleteProvider = ({
               <DialogPanel className="w-full mx-4 lg:w-[600px] max-h-[85vh] flex flex-col border bg-light-primary dark:bg-dark-primary border-light-secondary dark:border-dark-secondary rounded-lg">
                 <div className="px-6 pt-6 pb-4">
                   <h3 className="text-black/90 dark:text-white/90 font-medium">
-                    Delete connection
+                    Remove connection
                   </h3>
                 </div>
                 <div className="border-t border-light-200 dark:border-dark-200" />
                 <div className="flex-1 overflow-y-auto px-6 py-4">
                   <p className="text-sm text-black/60 dark:text-white/60">
-                    Are you sure you want to delete the connection &quot;
+                    Are you sure you want to remove the connection &quot;
                     {modelProvider.name}&quot;? This action cannot be undone.
-                    All associated models will also be removed.
                   </p>
                 </div>
                 <div className="px-6 py-6 flex justify-end space-x-2">
@@ -103,7 +102,7 @@ const DeleteProvider = ({
                     {loading ? (
                       <Loader2 className="animate-spin" size={16} />
                     ) : (
-                      'Delete'
+                      'Remove'
                     )}
                   </button>
                 </div>

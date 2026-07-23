@@ -2,6 +2,7 @@ import z from 'zod';
 import { ClassifierInput } from './types';
 import { classifierPrompt } from '@/lib/prompts/search/classifier';
 import formatChatHistoryAsString from '@/lib/utils/formatHistory';
+import { generateObjectWithRetry } from '@/lib/utils/generateObjectWithRetry';
 
 const schema = z.object({
   classification: z.object({
@@ -35,19 +36,35 @@ const schema = z.object({
 });
 
 export const classify = async (input: ClassifierInput) => {
-  const output = await input.llm.generateObject<typeof schema>({
-    messages: [
-      {
-        role: 'system',
-        content: classifierPrompt,
+  try {
+    return await generateObjectWithRetry<typeof schema>(input.llm, {
+      messages: [
+        {
+          role: 'system',
+          content: classifierPrompt,
+        },
+        {
+          role: 'user',
+          content: `<conversation_history>\n${formatChatHistoryAsString(input.chatHistory)}\n</conversation_history>\n<user_query>\n${input.query}\n</user_query>`,
+        },
+      ],
+      schema,
+    });
+  } catch (err) {
+    /* Classification failing must never kill the turn — fall back to the
+       search-everything default with the raw query as the standalone form. */
+    console.error('Classifier failed, defaulting to plain web search:', err);
+    return {
+      classification: {
+        skipSearch: false,
+        personalSearch: false,
+        academicSearch: false,
+        discussionSearch: false,
+        showWeatherWidget: false,
+        showStockWidget: false,
+        showCalculationWidget: false,
       },
-      {
-        role: 'user',
-        content: `<conversation_history>\n${formatChatHistoryAsString(input.chatHistory)}\n</conversation_history>\n<user_query>\n${input.query}\n</user_query>`,
-      },
-    ],
-    schema,
-  });
-
-  return output;
+      standaloneFollowUp: input.query,
+    };
+  }
 };

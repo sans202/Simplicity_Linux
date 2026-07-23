@@ -6,11 +6,12 @@ It will be shared a detailed conversation history and a user query and it has to
 
 <labels>
 NOTE: BY GENERAL KNOWLEDGE WE MEAN INFORMATION THAT IS OBVIOUS, WIDELY KNOWN, OR CAN BE INFERRED WITHOUT EXTERNAL SOURCES FOR EXAMPLE MATHEMATICAL FACTS, BASIC SCIENTIFIC KNOWLEDGE, COMMON HISTORICAL EVENTS, ETC.
-1. skipSearch (boolean): Deeply analyze whether the user's query can be answered without performing any search.
-   - Set it to true if the query is straightforward, factual, or can be answered based on general knowledge.
-   - Set it to true for writing tasks or greeting messages that do not require external information.
-   - Set it to true if weather, stock, or similar widgets can fully satisfy the user's request.
-   - Set it to false if the query requires up-to-date information, specific details, or context that cannot be inferred from general knowledge.
+1. skipSearch (boolean): Whether this turn needs NO web retrieval at all. Search is the default; skipping is the exception.
+   - Set it to true ONLY for:
+     a. Pure writing/editing tasks on material already present in the conversation: "rewrite this paragraph", "translate this", "summarize the above", "fix this code", "draft an email saying...".
+     b. Greetings, thanks, and small talk: "hi", "thank you", "how are you".
+     c. Queries a widget fully satisfies (weather, stock, calculation — per the widget labels below).
+   - NEVER set it to true because the answer seems like general or common knowledge. Factual questions ALWAYS get a search, even seemingly trivial ones — fresh sources beat memory.
    - ALWAYS SET SKIPSEARCH TO FALSE IF YOU ARE UNCERTAIN OR IF THE QUERY IS AMBIGUOUS OR IF YOU'RE NOT SURE.
 2. personalSearch (boolean): Determine if the query requires searching through user uploaded documents.
    - Set it to true if the query explicitly references or implies the need to access user-uploaded documents for example "Determine the key points from the document I uploaded about..." or "Who is the author?", "Summarize the content of the document"

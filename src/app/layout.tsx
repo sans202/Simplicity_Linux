@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import type { Metadata } from 'next';
-import { Montserrat } from 'next/font/google';
+import { Montserrat, Instrument_Serif } from 'next/font/google';
 import './globals.css';
 import { cn } from '@/lib/utils';
 import Sidebar from '@/components/Sidebar';
@@ -18,9 +18,19 @@ const montserrat = Montserrat({
   fallback: ['Arial', 'sans-serif'],
 });
 
+// Editorial serif used selectively (home heading, answer h1/h2) via the
+// `font-serif` utility -- body text stays on Montserrat.
+const instrumentSerif = Instrument_Serif({
+  weight: '400',
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-instrument-serif',
+  fallback: ['Georgia', 'serif'],
+});
+
 export const metadata: Metadata = {
-  title: 'Vane - Direct your curiosity',
-  description: 'Vane is an AI powered answering engine.',
+  title: 'Simplicity - Direct your curiosity',
+  description: 'Simplicity is an AI powered answering engine.',
 };
 
 export default function RootLayout({
@@ -33,7 +43,13 @@ export default function RootLayout({
 
   return (
     <html className="h-full" lang="en" suppressHydrationWarning>
-      <body className={cn('h-full antialiased', montserrat.className)}>
+      <body
+        className={cn(
+          'h-full antialiased',
+          montserrat.className,
+          instrumentSerif.variable,
+        )}
+      >
         <ThemeProvider>
           {setupComplete ? (
             <ChatProvider>

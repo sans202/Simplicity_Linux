@@ -125,11 +125,16 @@ class ConfigManager {
     this.initializeFromEnv();
   }
 
+  /* Write-temp-then-rename: a crash mid-write must never leave a truncated
+     config.json behind — that file holds every API key the user has entered.
+     The temp name carries pid+time because `next build` runs several workers
+     that each construct this singleton concurrently — a shared temp path
+     races (one worker renames it away, the next rename ENOENTs) and kills
+     the build. */
   private saveConfig() {
-    fs.writeFileSync(
-      this.configPath,
-      JSON.stringify(this.currentConfig, null, 2),
-    );
+    const tmpPath = `${this.configPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(this.currentConfig, null, 2));
+    fs.renameSync(tmpPath, this.configPath);
   }
 
   private initializeConfig() {
@@ -150,13 +155,17 @@ class ConfigManager {
             `Error parsing config file at ${this.configPath}:`,
             err,
           );
+          /* The corrupt file still holds the user's API keys — preserve it
+             for recovery instead of silently wiping everything. */
+          const backupPath = `${this.configPath}.corrupt-${Date.now()}`;
+          try {
+            fs.copyFileSync(this.configPath, backupPath);
+            console.log(`Corrupt config backed up to ${backupPath}`);
+          } catch {}
           console.log(
             'Loading default config and overwriting the existing file.',
           );
-          fs.writeFileSync(
-            this.configPath,
-            JSON.stringify(this.currentConfig, null, 2),
-          );
+          this.saveConfig();
           return;
         } else {
           console.log('Unknown error reading config file:', err);

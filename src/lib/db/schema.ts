@@ -13,9 +13,9 @@ export const messages = sqliteTable('messages', {
   responseBlocks: text('responseBlocks', { mode: 'json' })
     .$type<Block[]>()
     .default(sql`'[]'`),
-  status: text({ enum: ['answering', 'completed', 'error'] }).default(
-    'answering',
-  ),
+  status: text({
+    enum: ['answering', 'completed', 'error', 'cancelled'],
+  }).default('answering'),
 });
 
 interface DBFile {

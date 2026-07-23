@@ -15,6 +15,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { getSuggestions } from '../actions';
 import { MinimalProvider } from '../models/types';
+import { pickDefaultModel } from '../models/catalog';
 import { getAutoMediaSearch } from '../config/clientRegistry';
 import { applyPatch } from 'rfc6902';
 import { Widget } from '@/components/ChatWindow';
@@ -37,6 +38,17 @@ type ChatContext = {
   sources: string[];
   chatId: string | undefined;
   optimizationMode: string;
+  /* Composer's Search/Deep research/Model council pill — orthogonal to
+     optimizationMode. Persisted to localStorage so a choice survives a
+     reload, the same way the model and thinking toggles do. */
+  searchMode: 'search' | 'deepResearch' | 'council';
+  /* Perplexity ground truth: a lock toggle near the composer. Plain React
+     state (never localStorage) so it's scoped to the CURRENT thread only —
+     a new chat always starts with it off. When true, the client still
+     streams the turn exactly as normal (blocks flow through SessionManager,
+     not the db) but sends `incognito: true` so the server skips every
+     chats/messages row write for this thread (route.ts + search/index.ts). */
+  incognito: boolean;
   isMessagesLoaded: boolean;
   loading: boolean;
   notFound: boolean;
@@ -48,7 +60,9 @@ type ChatContext = {
   researchEnded: boolean;
   setResearchEnded: (ended: boolean) => void;
   setOptimizationMode: (mode: string) => void;
+  setSearchMode: (mode: 'search' | 'deepResearch' | 'council') => void;
   setSources: (sources: string[]) => void;
+  setIncognito: (incognito: boolean) => void;
   setFiles: (files: File[]) => void;
   setFileIds: (fileIds: string[]) => void;
   sendMessage: (
@@ -56,6 +70,7 @@ type ChatContext = {
     messageId?: string,
     rewrite?: boolean,
   ) => Promise<void>;
+  stopGeneration: () => void;
   rewrite: (messageId: string) => void;
   setChatModelProvider: (provider: ChatModelProvider) => void;
   setEmbeddingModelProvider: (provider: EmbeddingModelProvider) => void;
@@ -112,25 +127,41 @@ const checkConfig = async (
       );
     }
 
-    const chatModelProvider =
-      providers.find((p) => p.id === chatModelProviderId) ??
-      providers.find((p) => p.chatModels.length > 0);
+    /* Honour a stored choice only if it still resolves to a real model —
+       otherwise fall back to the curated catalog. Picking `chatModels[0]` (the
+       old behaviour) selects whatever the provider's API happened to list
+       first, which is how a Groq safety classifier or a retired gpt-3.5 ends
+       up answering questions and hanging the request. */
+    let chatModelProvider = providers.find((p) => p.id === chatModelProviderId);
+    let resolvedChatKey = chatModelProvider?.chatModels.find(
+      (m) => m.key === chatModelKey,
+    )?.key;
 
-    if (!chatModelProvider) {
-      throw new Error(
-        'No chat models found, pleae configure them in the settings page.',
-      );
+    if (!chatModelProvider || !resolvedChatKey) {
+      const fallback = pickDefaultModel(providers);
+      if (!fallback) {
+        throw new Error(
+          'No chat models found, please configure them in the settings page.',
+        );
+      }
+      chatModelProvider = providers.find((p) => p.id === fallback.providerId)!;
+      resolvedChatKey = fallback.key;
     }
 
     chatModelProviderId = chatModelProvider.id;
+    chatModelKey = resolvedChatKey;
 
-    const chatModel =
-      chatModelProvider.chatModels.find((m) => m.key === chatModelKey) ??
-      chatModelProvider.chatModels[0];
-    chatModelKey = chatModel.key;
-
+    /* Embeddings only rerank search results, so this is never a user choice.
+       Prefer a purpose-built embedding model — Ollama lists its chat models
+       here too, and picking one of those means running every search result
+       through a 7B chat model. */
     const embeddingModelProvider =
       providers.find((p) => p.id === embeddingModelProviderId) ??
+      providers.find(
+        (p) =>
+          p.type === 'ollama' &&
+          p.embeddingModels.some((m) => m.key.includes('embed')),
+      ) ??
       providers.find((p) => p.embeddingModels.length > 0);
 
     if (!embeddingModelProvider) {
@@ -141,10 +172,16 @@ const checkConfig = async (
 
     embeddingModelProviderId = embeddingModelProvider.id;
 
+    /* Same reasoning as the provider choice above: prefer an actual embedding
+       model over index 0, which for Ollama is a chat model. */
     const embeddingModel =
       embeddingModelProvider.embeddingModels.find(
         (m) => m.key === embeddingModelKey,
-      ) ?? embeddingModelProvider.embeddingModels[0];
+      ) ??
+      embeddingModelProvider.embeddingModels.find((m) =>
+        m.key.includes('embed'),
+      ) ??
+      embeddingModelProvider.embeddingModels[0];
     embeddingModelKey = embeddingModel.key;
 
     localStorage.setItem('chatModelKey', chatModelKey);
@@ -253,15 +290,20 @@ export const chatContext = createContext<ChatContext>({
   sections: [],
   notFound: false,
   optimizationMode: '',
+  searchMode: 'search',
+  incognito: false,
   chatModelProvider: { key: '', providerId: '' },
   embeddingModelProvider: { key: '', providerId: '' },
   researchEnded: false,
   rewrite: () => {},
   sendMessage: async () => {},
+  stopGeneration: () => {},
   setFileIds: () => {},
   setFiles: () => {},
   setSources: () => {},
+  setIncognito: () => {},
   setOptimizationMode: () => {},
+  setSearchMode: () => {},
   setChatModelProvider: () => {},
   setEmbeddingModelProvider: () => {},
   setResearchEnded: () => {},
@@ -278,6 +320,7 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
   const [loading, setLoading] = useState(false);
   const [messageAppeared, setMessageAppeared] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const [researchEnded, setResearchEnded] = useState(false);
 
@@ -288,7 +331,11 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
   const [fileIds, setFileIds] = useState<string[]>([]);
 
   const [sources, setSources] = useState<string[]>(['web']);
+  const [incognito, setIncognito] = useState(false);
   const [optimizationMode, setOptimizationMode] = useState('speed');
+  const [searchMode, setSearchModeState] = useState<
+    'search' | 'deepResearch' | 'council'
+  >('search');
 
   const [isMessagesLoaded, setIsMessagesLoaded] = useState(false);
 
@@ -471,6 +518,18 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   useEffect(() => {
+    const stored = localStorage.getItem('searchMode');
+    if (stored === 'search' || stored === 'deepResearch' || stored === 'council') {
+      setSearchModeState(stored);
+    }
+  }, []);
+
+  const setSearchMode = (mode: 'search' | 'deepResearch' | 'council') => {
+    setSearchModeState(mode);
+    localStorage.setItem('searchMode', mode);
+  };
+
+  useEffect(() => {
     if (params.chatId && params.chatId !== chatId) {
       setChatId(params.chatId);
       setMessages([]);
@@ -480,6 +539,10 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
       setIsMessagesLoaded(false);
       setNotFound(false);
       setNewChatCreated(false);
+      /* Navigating to a different (already-persisted) chat — incognito is
+         scoped to the thread that was active, never the one being switched
+         to. */
+      setIncognito(false);
     }
   }, [params.chatId, chatId]);
 
@@ -554,10 +617,25 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
       if (data.type === 'error') {
         toast.error(data.data);
         setLoading(false);
+        setResearchEnded(true);
+        /* The toast vanishes in seconds — the turn itself must show the
+           failure. An error block in responseBlocks survives on screen (and
+           gives the Rewrite button an obvious retry target). */
         setMessages((prev) =>
           prev.map((msg) =>
             msg.messageId === messageId
-              ? { ...msg, status: 'error' as const }
+              ? {
+                  ...msg,
+                  status: 'error' as const,
+                  responseBlocks: [
+                    ...msg.responseBlocks,
+                    {
+                      id: crypto.randomUUID(),
+                      type: 'error',
+                      data: String(data.data ?? 'Something went wrong.'),
+                    } as any,
+                  ],
+                }
               : msg,
           ),
         );
@@ -721,6 +799,9 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
     setResearchEnded(false);
     setMessageAppeared(false);
 
+    const abortController = new AbortController();
+    abortRef.current = abortController;
+
     if (messages.length <= 1) {
       window.history.replaceState(null, '', `/c/${chatId}`);
     }
@@ -744,6 +825,7 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
     const res = await fetch('/api/chat', {
       method: 'POST',
+      signal: abortController.signal,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -758,6 +840,8 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
         files: fileIds,
         sources: sources,
         optimizationMode: optimizationMode,
+        searchMode: searchMode,
+        incognito: incognito,
         history: rewrite
           ? chatHistory.current.slice(
               0,
@@ -773,8 +857,22 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
           providerId: embeddingModelProvider.providerId,
         },
         systemInstructions: localStorage.getItem('systemInstructions'),
+        thinking: localStorage.getItem('thinkingEnabled') !== '0',
       }),
     });
+
+    /* A pre-flight rejection (invalid body, or Model council's server-side
+       backstop when a stale client still has it selected with <2 connected
+       models — see route.ts) comes back as a plain non-2xx JSON response,
+       not the SSE stream. Surface it as a toast instead of hanging on a
+       spinner forever waiting for stream events that will never arrive. */
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      toast.error(body?.message ?? 'That request failed. Try again.');
+      setLoading(false);
+      setMessages((prev) => prev.filter((msg) => msg.messageId !== messageId));
+      return;
+    }
 
     if (!res.body) throw new Error('No response body');
 
@@ -785,24 +883,38 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
     const messageHandler = getMessageHandler(newMessage);
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
 
-      partialChunk += decoder.decode(value, { stream: true });
+        partialChunk += decoder.decode(value, { stream: true });
 
-      try {
-        const messages = partialChunk.split('\n');
-        for (const msg of messages) {
-          if (!msg.trim()) continue;
-          const json = JSON.parse(msg);
-          messageHandler(json);
+        try {
+          const messages = partialChunk.split('\n');
+          for (const msg of messages) {
+            if (!msg.trim()) continue;
+            const json = JSON.parse(msg);
+            messageHandler(json);
+          }
+          partialChunk = '';
+        } catch (error) {
+          console.warn('Incomplete JSON, waiting for next chunk...');
         }
-        partialChunk = '';
-      } catch (error) {
-        console.warn('Incomplete JSON, waiting for next chunk...');
       }
+    } catch (err: any) {
+      /* Stop button: the fetch abort surfaces here as an AbortError. Whatever
+         streamed so far stays on screen; the turn just ends. */
+      if (err?.name !== 'AbortError') throw err;
+      setResearchEnded(true);
+      setLoading(false);
+    } finally {
+      abortRef.current = null;
     }
+  };
+
+  const stopGeneration = () => {
+    abortRef.current?.abort();
   };
 
   return (
@@ -822,10 +934,15 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
         messageAppeared,
         notFound,
         optimizationMode,
+        searchMode,
+        incognito,
+        stopGeneration,
         setFileIds,
         setFiles,
         setSources,
+        setIncognito,
         setOptimizationMode,
+        setSearchMode,
         rewrite,
         sendMessage,
         setChatModelProvider,

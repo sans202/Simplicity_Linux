@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import TextareaAutosize from 'react-textarea-autosize';
 import Sources from './MessageInputActions/Sources';
 import Optimization from './MessageInputActions/Optimization';
-import Attach from './MessageInputActions/Attach';
+import PlusMenu from './MessageInputActions/PlusMenu';
+import ModeSelector from './MessageInputActions/ModeSelector';
 import { useChat } from '@/lib/hooks/useChat';
 import ModelSelector from './MessageInputActions/ChatModelSelector';
 
@@ -64,13 +65,20 @@ const EmptyChatMessageInput = () => {
           className="px-2 bg-transparent placeholder:text-[15px] placeholder:text-black/50 dark:placeholder:text-white/50 text-sm text-black dark:text-white resize-none focus:outline-none w-full max-h-24 lg:max-h-36 xl:max-h-48"
           placeholder="Ask anything..."
         />
+        {/* Same always-visible control set as the follow-up composer
+            (MessageInput) — this is the home screen, so it's the first place
+            a user sees the Search/Deep research/Model council pill, not an
+            afterthought only the in-chat composer got. */}
         <div className="flex flex-row items-center justify-between mt-4">
-          <Optimization />
+          <div className="flex flex-row items-center space-x-1">
+            <Optimization />
+            <PlusMenu />
+            <ModeSelector />
+            <Sources />
+          </div>
           <div className="flex flex-row items-center space-x-2">
             <div className="flex flex-row items-center space-x-1">
-              <Sources />
               <ModelSelector />
-              <Attach />
             </div>
             <button
               disabled={message.trim().length === 0}
