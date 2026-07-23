@@ -6,16 +6,14 @@
 
 | Platform | Download | Status |
 |---|---|---|
-| **macOS** (Apple Silicon, macOS 13+) | [Simplicity-mac-arm64.dmg](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-mac-arm64.dmg) | Signed · tested |
+| **macOS** (Apple Silicon, macOS 13+) | [Simplicity-mac-arm64.dmg](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-mac-arm64.dmg) | Signed & notarized by Apple · opens clean · tested |
 | **Windows** (10/11, 64-bit) | [Simplicity-Setup-Windows.exe](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-Setup-Windows.exe) | **Beta — built cross-platform, not yet verified on real Windows hardware.** If it misbehaves, [open an issue](https://github.com/Blueturboguy07/Simplicity/issues). |
 
-### First-open warnings (read this — it's normal)
+### First-open notes
 
-Neither build is on the app stores, so both operating systems will warn you once. **Windows is the easier of the two** — two clicks and you're in. macOS takes one extra step.
+**macOS** — the app is signed with an Apple Developer ID and notarized by Apple. It opens like any other app, no warnings.
 
-**Windows — SmartScreen.** You'll see *"Windows protected your PC."* This appears for any new app that hasn't accumulated download reputation with Microsoft — it is not a malware verdict. Click **More info → Run anyway**. That's it.
-
-**macOS — Gatekeeper.** The app is signed with a real Apple Developer ID but not yet notarized, so the first launch shows *"Apple could not verify 'Simplicity' is free of malware"* with only Done / Move to Trash. Click **Done** (not Move to Trash!), then open **System Settings → Privacy & Security**, scroll down to the Simplicity message, and click **"Open Anyway"** — then launch it again and confirm. One time only. (On older macOS versions, right-click the app → Open → Open also works.)
+**Windows — SmartScreen warning (normal).** You'll see *"Windows protected your PC."* This appears for any new app that hasn't accumulated download reputation with Microsoft — it is not a malware verdict. Click **More info → Run anyway**. Two clicks, one time.
 
 ### First launch
 
