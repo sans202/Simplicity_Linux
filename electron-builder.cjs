@@ -60,4 +60,9 @@ module.exports = {
     perMachine: false,
     allowToChangeInstallationDirectory: true,
   },
+  linux: {
+    target: [{ target: 'AppImage', arch: ['x64'] }],
+    artifactName: 'Simplicity-Linux-${arch}.${ext}',
+    category: 'Utility',
+  },
 };
