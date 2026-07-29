@@ -8,6 +8,7 @@
 |---|---|---|
 | **macOS** (Apple Silicon, macOS 13+) | [Simplicity-mac-arm64.dmg](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-mac-arm64.dmg) | Signed & notarized by Apple · opens clean · tested |
 | **Windows** (10/11, 64-bit) | [Simplicity-Setup-Windows.exe](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-Setup-Windows.exe) | **Beta — built cross-platform, not yet verified on real Windows hardware.** If it misbehaves, [open an issue](https://github.com/Blueturboguy07/Simplicity/issues). |
+| **Linux** (x64 AppImage) | [Simplicity-Linux-x86_64.AppImage](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-Linux-x86_64.AppImage) | **Beta — built for Linux x64.** Run `chmod +x` to execute. |
 
 ### First-open notes
 
@@ -43,7 +44,7 @@ This is an early beta — a starting point. The core loop (search → sources �
 git clone https://github.com/Blueturboguy07/Simplicity.git
 cd Simplicity
 yarn install
-yarn dist:mac   # or: yarn dist:win
+yarn dist:mac   # or: yarn dist:win or yarn dist:linux
 ```
 
 Requires Node 24+. Development: `yarn dev`, tests: `yarn test`.
